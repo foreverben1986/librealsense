@@ -6,6 +6,7 @@ ubuntu-xenial-hwe/
 
 # CMake
 build/
+buildbak/
 connectivity_check
 
 # XCode
