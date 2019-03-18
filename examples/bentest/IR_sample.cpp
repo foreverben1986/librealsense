@@ -3,16 +3,34 @@
 
 // include OpenCV header file
 #include <opencv2/opencv.hpp>
+#include <sstream>
+#include <ctime>
+#include <iostream>
+#include <fstream>
 
 using namespace std;
 using namespace cv;
 
 float get_depth_scale(rs2::device dev);
-void traverseDepth(const rs2::frame& frm, int w, int h, float depth_scale);
 rs2_stream find_stream_to_align(const std::vector<rs2::stream_profile>& streams);
+int outputIntrinsics(float depth_scale, const struct rs2_intrinsics* intrin, const string& path);
 
-int main()
+int main(int argc, char *argv[])
 {
+    // get fps and output path
+    if (argc < 3) {
+        throw std::runtime_error("please input fps and output path"); 
+    }
+    int num = 0;
+    if (argc >= 4) {
+        num = std::atoi(argv[3]);
+    }
+    int fps = std::atoi(argv[1]);
+    string path = argv[2];
+    if (fps > 30) {
+        throw std::runtime_error("please input fps cannot be larger than 30"); 
+    }
+
     //Contruct a pipeline which abstracts the device
     rs2::pipeline pipe;
 
@@ -41,92 +59,76 @@ int main()
     // ben modify start
     // Camera warmup - dropping several first frames to let auto-exposure stabilize
     rs2::frameset frames;
-    for(int i = 0; i < 30; i++)
+    for(long i = 1; i < 60; i++)
     {
+        int interval = 30 / fps;
         //Wait for all configured streams to produce a frame
         frames = pipe.wait_for_frames();
+        if (i%interval != 0) {
+            continue;
+        }
+        //Pipeline could choose a device that does not have a color stream
+        //If there is no color stream, choose to align depth to another stream
+        rs2_stream align_to = find_stream_to_align(profile.get_streams());
+
+        // Create a rs2::align object.
+        // rs2::align allows us to perform alignment of depth frames to others frames
+        //The "align_to" is the stream type to which we plan to align depth frames.
+        rs2::align align(align_to);
+
+        //Get processed aligned frame
+        auto processed = align.process(frames);
+
+        // Trying to get both other and aligned depth frames
+        rs2::video_frame other_frame = processed.first(align_to);
+        rs2::depth_frame aligned_depth_frame = processed.get_depth_frame();
+        rs2::frame newFrame = color_map.process(aligned_depth_frame);
+
+        rs2_intrinsics intr = aligned_depth_frame.get_profile().as<rs2::video_stream_profile>().get_intrinsics();
+
+        //If one of them is unavailable, continue iteration
+        // std::cout << "aligned_depth_frame" << aligned_depth_frame << std::endl;
+        // std::cout << "other_frame" << other_frame << std::endl;
+        if (!aligned_depth_frame || !other_frame)
+        {
+            return 0;
+        }
+
+        // Creating OpenCV Matrix from a color image
+        Mat color(Size(1280, 720), CV_8UC3, (void*)other_frame.get_data(), Mat::AUTO_STEP);
+        Mat ir(Size(1280, 720), CV_8UC3, (void*)newFrame.get_data(), Mat::AUTO_STEP);
+        Mat depth(Size(1280, 720), CV_16U, (void*)aligned_depth_frame.get_data(), Mat::AUTO_STEP);
+
+        // resize(color, color, Size(1920,1080), INTER_CUBIC);
+        // resize(ir, ir, Size(1920,1080), INTER_CUBIC);
+        stringstream colorPng;
+        stringstream irPng;
+        stringstream depthTxt;
+        stringstream depthPng;
+        time_t now = time(0);
+        colorPng << path << "color" << "_" << i << now << ".png";
+        irPng << path << "ir" << "_" << i << now << ".png";
+        depthTxt << path << "depth" << "_" << i << now << ".json";
+        depthPng << path << "depth" << "_" << i << now << ".png";
+        int depthResult = outputIntrinsics(depth_scale, &intr, depthTxt.str());
+        if (!depthResult) {
+            std::cout << depthTxt.str() << " output failed" << std::endl;
+            continue;
+        }
+        // cv::medianBlur(depth, depth, 5);
+        // cv::medianBlur(ir, ir, 5);
+        // cv::GaussianBlur(ir, ir, cv::Size(9,9), 1.0, 1.0);
+        // cv::GaussianBlur(depth, depth, cv::Size(9, 9), 1.0, 1.0);
+        imwrite(colorPng.str(), color);
+        imwrite(irPng.str(), ir);
+        imwrite(depthPng.str(), depth);
+
+        if (--num == 0) {
+            break;
+        }
+
     }
 
-    frames = pipe.wait_for_frames();
-
-    //Pipeline could choose a device that does not have a color stream
-    //If there is no color stream, choose to align depth to another stream
-    rs2_stream align_to = find_stream_to_align(profile.get_streams());
-
-    // Create a rs2::align object.
-    // rs2::align allows us to perform alignment of depth frames to others frames
-    //The "align_to" is the stream type to which we plan to align depth frames.
-    rs2::align align(align_to);
-
-    //Get processed aligned frame
-    auto processed = align.process(frames);
-
-    // Trying to get both other and aligned depth frames
-    rs2::video_frame other_frame = processed.first(align_to);
-    rs2::depth_frame aligned_depth_frame = processed.get_depth_frame();
-    rs2::frame newFrame = color_map.process(aligned_depth_frame);
-
-    //If one of them is unavailable, continue iteration
-    std::cout << "aligned_depth_frame" << aligned_depth_frame << std::endl;
-    std::cout << "other_frame" << other_frame << std::endl;
-    if (!aligned_depth_frame || !other_frame)
-    {
-        return 0;
-    }
-
-    // Creating OpenCV Matrix from a color image
-    Mat color(Size(1280, 720), CV_8UC3, (void*)other_frame.get_data(), Mat::AUTO_STEP);
-    Mat ir(Size(1280, 720), CV_8UC3, (void*)newFrame.get_data(), Mat::AUTO_STEP);
-    // Mat depth(Size(1280, 720), CV_16F, (void*)aligned_depth_frame.get_data(), Mat::AUTO_STEP);
-
-    // resize(color, color, Size(1920,1080), INTER_CUBIC);
-    // resize(ir, ir, Size(1920,1080), INTER_CUBIC);
-    imwrite("./aa2.png", color);
-    imwrite("./bb2.png", ir);
-    // Display in a GUI1
-    // namedWindow("Display Image", WINDOW_AUTOSIZE );
-    // imshow("Display Image", color);
-
-
-    //Get each frame
-    // rs2::frame ir_frame = frames.first(RS2_STREAM_INFRARED);
-    // rs2::frame depth_frame = frames.get_depth_frame();
-
-    // Wait for the next set of frames from the camera. Now that autoexposure, etc.
-    // has settled, we will write these to disk
-    // for (auto&& frame : frames)
-    // {
-    //     // We can only save video frames as pngs, so we skip the rest
-    //     if (auto vf = frame.as<rs2::video_frame>())
-    //     {
-    //         auto stream = frame.get_profile().stream_type();
-    //         std::cout << "inininin1" << stream << std::endl;
-    //         // Use the colorizer to get an rgb image for the depth stream
-    //         if (vf.is<rs2::depth_frame>()) 
-    //         {
-    //             std::cout << "inininin2" << std::endl;
-    //             // traverseDepth(frame, vf.get_width(), vf.get_height(), depth_scale);
-    //         }
-
-    //     }
-    // }
-    // ben modify end
-
-    // ben delete start
-    // // Creating OpenCV matrix from IR image
-    // Mat ir(Size(640, 480), CV_8UC1, (void*)ir_frame.get_data(), Mat::AUTO_STEP);
-    // // Mat ir(Size(640, 480), CV_8UC1, (void*)depth_frame.get_data(), Mat::AUTO_STEP);
-
-    // // Apply Histogram Equalization
-    // equalizeHist( ir, ir );
-    // applyColorMap(ir, ir, COLORMAP_JET);
-
-    // // Display the image in GUI
-    // namedWindow("Display Image", WINDOW_AUTOSIZE );
-    // imshow("Display Image", ir);
-    // ben delete end
-
-    waitKey(0);
 
     return 0;
 }
@@ -145,19 +147,29 @@ float get_depth_scale(rs2::device dev)
     throw std::runtime_error("Device does not have a depth sensor");
 }
 
-void traverseDepth(const rs2::frame& frm, int w, int h, float depth_scale)
+int outputIntrinsics(float depth_scale, const struct rs2_intrinsics* intrin, const string& path) 
 {
-    const uint16_t* p_depth_frame = reinterpret_cast<const uint16_t*>(frm.get_data());
-    for (int y = 0; y < h; y++)
+    ofstream depthf(path);
+    if (!depthf) return 0;
+    depthf << "{" << std::endl;
+    depthf << "\"scale\":" << depth_scale << ",";
+    depthf << "\"fx\":" << intrin->fx << ",";
+    depthf << "\"fy\":" << intrin->fy << ",";
+    depthf << "\"ppx\":" << intrin->ppx << ",";
+    depthf << "\"ppy\":" << intrin->ppy << ",";
+    depthf << "\"model\":\"" << intrin->model << "\",";
+    depthf << "\"coeffs\": [" ;
+    for (int i = 0; i < 5; i++) 
     {
-        auto depth_pixel_index = y * w;
-        for (int x = 0; x < w; x++, ++depth_pixel_index)
-        {
-            // Get the depth value of the current pixel
-            auto pixels_distance = depth_scale * p_depth_frame[depth_pixel_index];
-            std::cout << "x:" << x << ",y" << y << ",pixels_distance: " << pixels_distance << std::endl;
+        if (i == 4) {
+            depthf << intrin->coeffs[i];
+        } else {
+            depthf << intrin->coeffs[i] <<",";
         }
     }
+    depthf << "]" ;
+    depthf << "}" << std::endl;
+    return 1;
 }
 
 rs2_stream find_stream_to_align(const std::vector<rs2::stream_profile>& streams)

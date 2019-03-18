@@ -23,8 +23,18 @@ int main(int argc, char * argv[]) try
 
     // Declare RealSense pipeline, encapsulating the actual device and sensors
     rs2::pipeline pipe;
+
+    // ben add start
+    //Create a configuration for configuring the pipeline with a non default profile
+    rs2::config cfg;
+
+    //Add desired streams to configuration
+    cfg.enable_stream(RS2_STREAM_COLOR, 1920, 1080, RS2_FORMAT_BGR8, 30);
+    // ben add end
+
     // Start streaming with default recommended configuration
-    pipe.start();
+    // pipe.start();
+    pipe.start(cfg);
 
     // Capture 30 frames to give autoexposure, etc. a chance to settle
     for (auto i = 0; i < 30; ++i) pipe.wait_for_frames();
