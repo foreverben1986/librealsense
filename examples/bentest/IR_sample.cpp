@@ -119,9 +119,9 @@ int main(int argc, char *argv[])
         // cv::medianBlur(ir, ir, 5);
         // cv::GaussianBlur(ir, ir, cv::Size(9,9), 1.0, 1.0);
         // cv::GaussianBlur(depth, depth, cv::Size(9, 9), 1.0, 1.0);
-        imwrite(colorPng.str(), color);
         imwrite(irPng.str(), ir);
         imwrite(depthPng.str(), depth);
+        imwrite(colorPng.str(), color);
 
         if (--num == 0) {
             break;
